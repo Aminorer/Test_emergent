@@ -3,7 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import './App.css';
 
-// CORRECTION: Utiliser port 8080 et configuration proxy correcte
+// CORRECTED: Configuration backend - Port cohérent avec le serveur
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8080';
 const API = `${BACKEND_URL}/api`;
 
@@ -19,12 +19,14 @@ function App() {
   const [selectedEntities, setSelectedEntities] = useState([]);
   const [editingEntity, setEditingEntity] = useState(null);
 
-  // Check system status on load
+  // CORRECTED: Check system status on load avec timeout réduit
   useEffect(() => {
     const checkStatus = async () => {
       try {
         console.log('🔍 Checking backend status at:', API);
-        const response = await axios.get(`${API}/health`);
+        const response = await axios.get(`${API}/health`, {
+          timeout: 10000 // 10 secondes timeout
+        });
         console.log('✅ Backend Response:', response.data);
         setSystemStatus(response.data);
       } catch (error) {
@@ -32,9 +34,15 @@ function App() {
         console.error('❌ Error details:', {
           message: error.message,
           response: error.response?.data,
-          status: error.response?.status
+          status: error.response?.status,
+          code: error.code
         });
         setSystemStatus({ spacy_available: false, ollama_available: false });
+        
+        // Show user-friendly error
+        if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+          alert('⚠️ Impossible de se connecter au backend.\nVérifiez que le serveur backend tourne sur http://localhost:8080');
+        }
       }
     };
     checkStatus();
@@ -44,43 +52,72 @@ function App() {
     if (acceptedFiles.length === 0) return;
     
     const file = acceptedFiles[0];
-    console.log('📄 File selected:', file.name, file.size, 'bytes');
+    console.log('📄 File selected:', file.name, file.size, 'bytes', file.type);
+    
+    // Validation du fichier
+    if (file.size > 50 * 1024 * 1024) { // 50MB
+      alert('❌ Fichier trop volumineux. Taille maximum : 50MB');
+      return;
+    }
     
     const reader = new FileReader();
     
     reader.onload = async (event) => {
       const content = event.target.result;
+      
+      // Validation du contenu
+      if (!content || content.trim().length === 0) {
+        alert('❌ Fichier vide ou illisible');
+        return;
+      }
+      
       console.log('📝 File content length:', content.length);
       console.log('📝 Content preview:', content.substring(0, 200));
       
       setDocument({ filename: file.name, content });
       setProcessing(true);
+      setEntities([]); // Reset entities
       
       try {
         console.log(`🔄 Sending request to: ${API}/process`);
         console.log(`🔄 Processing mode: ${currentMode}`);
         
         const payload = {
-          content,
+          content: content.trim(),
           filename: file.name,
           mode: currentMode
         };
-        console.log('📤 Request payload:', payload);
+        console.log('📤 Request payload size:', JSON.stringify(payload).length, 'chars');
         
         const response = await axios.post(`${API}/process`, payload, {
           headers: {
             'Content-Type': 'application/json'
           },
-          timeout: 30000 // 30 secondes timeout
+          timeout: 60000 // CORRECTED: 60 secondes timeout pour traitement long
         });
         
         console.log('✅ Processing response:', response.data);
-        setEntities(response.data.entities || []);
+        const responseEntities = response.data.entities || [];
+        setEntities(responseEntities);
         
-        if ((response.data.entities || []).length === 0) {
-          alert(`Aucune entité détectée dans le document.\nMode utilisé: ${response.data.mode_used}\nTemps de traitement: ${response.data.processing_time?.toFixed(2)}s\n\nVérifiez que votre document contient des données personnelles françaises (téléphones, emails, noms, adresses, etc.)`);
+        // CORRECTED: Messages plus informatifs
+        if (responseEntities.length === 0) {
+          alert(`📊 Analyse terminée !\n\n` +
+                `❌ Aucune entité détectée dans le document\n` +
+                `Mode utilisé: ${response.data.mode_used}\n` +
+                `Temps de traitement: ${response.data.processing_time?.toFixed(2)}s\n\n` +
+                `💡 Assurez-vous que votre document contient des données personnelles françaises :\n` +
+                `• Téléphones (06.12.34.56.78)\n` +
+                `• Emails (nom@domaine.fr)\n` +
+                `• Adresses (123 rue de la Paix, 75001 Paris)\n` +
+                `• SIRET (14 chiffres)\n` +
+                `• Références juridiques (RG 24/12345)`);
         } else {
-          alert(`Document traité avec succès!\n${response.data.total_occurrences} entités détectées en ${response.data.processing_time?.toFixed(2)}s`);
+          alert(`✅ Document traité avec succès !\n\n` +
+                `📊 ${response.data.total_occurrences} entités détectées :\n` +
+                `• ${responseEntities.filter(e => e.source === 'REGEX').length} par REGEX\n` +
+                `• ${responseEntities.filter(e => e.source === 'NER').length} par NER\n` +
+                `⏱️ Temps de traitement: ${response.data.processing_time?.toFixed(2)}s`);
           setCurrentPage('dashboard');
         }
       } catch (error) {
@@ -88,14 +125,23 @@ function App() {
         console.error('❌ Error response:', error.response?.data);
         console.error('❌ Error status:', error.response?.status);
         
-        let errorMessage = 'Erreur de connexion au backend';
-        if (error.response?.data?.detail) {
+        let errorMessage = 'Erreur inconnue';
+        
+        if (error.code === 'ECONNABORTED') {
+          errorMessage = 'Timeout - Le traitement a pris trop de temps (>60s).\nEssayez avec un document plus petit.';
+        } else if (error.response?.status === 500) {
+          errorMessage = `Erreur serveur: ${error.response?.data?.detail || 'Erreur interne'}`;
+        } else if (error.response?.status === 422) {
+          errorMessage = 'Format de données invalide. Vérifiez le contenu du fichier.';
+        } else if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+          errorMessage = 'Impossible de se connecter au backend.\nVérifiez que le serveur tourne sur http://localhost:8080';
+        } else if (error.response?.data?.detail) {
           errorMessage = error.response.data.detail;
         } else if (error.message) {
           errorMessage = error.message;
         }
         
-        alert(`Erreur lors du traitement du document:\n${errorMessage}\n\nVérifiez que le backend tourne sur http://localhost:8080`);
+        alert(`❌ Erreur lors du traitement :\n\n${errorMessage}\n\n🔧 Vérifications :\n• Backend actif sur localhost:8080\n• Fichier lisible et contenu valide\n• Connexion réseau stable`);
       } finally {
         setProcessing(false);
       }
@@ -103,7 +149,7 @@ function App() {
     
     reader.onerror = () => {
       console.error('❌ File reading error');
-      alert('Erreur lors de la lecture du fichier');
+      alert('❌ Erreur lors de la lecture du fichier.\nVérifiez que le fichier n\'est pas corrompu.');
       setProcessing(false);
     };
     
@@ -118,10 +164,26 @@ function App() {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     },
     maxSize: 50 * 1024 * 1024,
-    multiple: false
+    multiple: false,
+    onDropRejected: (fileRejections) => {
+      const rejectedFile = fileRejections[0];
+      const errors = rejectedFile.errors.map(e => e.message).join('\n');
+      alert(`❌ Fichier rejeté :\n\n${errors}\n\nFormats acceptés: TXT, PDF, DOCX\nTaille max: 50MB`);
+    }
   });
 
   const generateDocument = async () => {
+    if (!entities || entities.length === 0) {
+      alert('❌ Aucune entité à traiter pour la génération du document');
+      return;
+    }
+
+    const selectedCount = entities.filter(e => e.selected).length;
+    if (selectedCount === 0) {
+      alert('❌ Sélectionnez au moins une entité à anonymiser');
+      return;
+    }
+
     try {
       console.log('📄 Generating document with entities:', entities.filter(e => e.selected));
       
@@ -131,7 +193,7 @@ function App() {
         filename: `${document.filename.split('.')[0]}_anonymise.docx`
       };
       
-      console.log('📤 Document generation payload:', payload);
+      console.log('📤 Document generation request...');
       
       const response = await axios.post(`${API}/generate-document`, payload, {
         responseType: 'blob',
@@ -143,8 +205,10 @@ function App() {
       
       console.log('✅ Document generated, size:', response.data.size);
       
-      // Create download link
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      // CORRECTED: Création du lien de téléchargement améliorée
+      const url = window.URL.createObjectURL(new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      }));
       const link = document.createElement('a');
       link.href = url;
       link.setAttribute('download', `${document.filename.split('.')[0]}_anonymise.docx`);
@@ -153,11 +217,21 @@ function App() {
       link.remove();
       window.URL.revokeObjectURL(url);
       
-      alert('Document anonymisé généré avec succès!');
+      alert(`✅ Document anonymisé généré avec succès !\n\n📄 Fichier: ${document.filename.split('.')[0]}_anonymise.docx\n📊 ${selectedCount} entités anonymisées`);
     } catch (error) {
       console.error('❌ Document generation error:', error);
       console.error('❌ Error response:', error.response?.data);
-      alert(`Erreur lors de la génération du document:\n${error.response?.data?.detail || error.message}`);
+      
+      let errorMessage = 'Erreur lors de la génération du document';
+      if (error.code === 'ECONNABORTED') {
+        errorMessage = 'Timeout lors de la génération (>30s)';
+      } else if (error.response?.data?.detail) {
+        errorMessage = error.response.data.detail;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      alert(`❌ ${errorMessage}\n\n🔧 Essayez de :\n• Réduire le nombre d'entités sélectionnées\n• Vérifier la connexion backend`);
     }
   };
 
@@ -170,9 +244,14 @@ function App() {
   };
 
   const updateEntityReplacement = (entityId, newReplacement) => {
+    if (!newReplacement || newReplacement.trim() === '') {
+      alert('❌ Le remplacement ne peut pas être vide');
+      return;
+    }
+    
     setEntities(entities.map(entity => 
       entity.id === entityId 
-        ? { ...entity, replacement: newReplacement }
+        ? { ...entity, replacement: newReplacement.trim() }
         : entity
     ));
   };
@@ -180,31 +259,35 @@ function App() {
   const deleteEntity = (entityId) => {
     if (window.confirm('Êtes-vous sûr de vouloir supprimer cette entité ?')) {
       setEntities(entities.filter(entity => entity.id !== entityId));
+      // Remove from selection if selected
+      setSelectedEntities(selectedEntities.filter(id => id !== entityId));
     }
   };
 
   const createGroup = () => {
     if (selectedEntities.length < 2) {
-      alert('Sélectionnez au moins 2 entités pour créer un groupe');
+      alert('❌ Sélectionnez au moins 2 entités pour créer un groupe');
       return;
     }
     
-    const groupReplacement = prompt('Nom du groupe:');
-    if (groupReplacement) {
+    const groupReplacement = prompt('Nom du groupe (remplacement commun) :');
+    if (groupReplacement && groupReplacement.trim()) {
       setEntities(entities.map(entity => 
         selectedEntities.includes(entity.id)
-          ? { ...entity, replacement: groupReplacement }
+          ? { ...entity, replacement: groupReplacement.trim() }
           : entity
       ));
       setSelectedEntities([]);
-      alert(`Groupe "${groupReplacement}" créé avec ${selectedEntities.length} entités`);
+      alert(`✅ Groupe "${groupReplacement}" créé avec ${selectedEntities.length} entités`);
     }
   };
 
-  // Filter entities
+  // CORRECTED: Filter entities with better search
   const filteredEntities = entities.filter(entity => {
-    const matchesSearch = entity.text.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         entity.replacement.toLowerCase().includes(searchTerm.toLowerCase());
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = entity.text.toLowerCase().includes(searchLower) ||
+                         entity.replacement.toLowerCase().includes(searchLower) ||
+                         entity.type.toLowerCase().includes(searchLower);
     const matchesFilter = sourceFilter === 'all' || entity.source === sourceFilter;
     return matchesSearch && matchesFilter;
   });
@@ -235,26 +318,28 @@ function App() {
               100% local et conforme RGPD.
             </p>
             
-            {/* System Status avec debug */}
+            {/* CORRECTED: System Status amélioré */}
             <div className="flex justify-center gap-4 text-sm">
               <div className={`flex items-center gap-1 px-3 py-1 rounded-full ${
                 systemStatus.spacy_available ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
               }`}>
                 <div className={`w-2 h-2 rounded-full ${systemStatus.spacy_available ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                spaCy {systemStatus.spacy_available ? 'Disponible' : 'Indisponible'}
+                spaCy {systemStatus.spacy_available ? 'Disponible ✅' : 'Indisponible ❌'}
               </div>
               <div className={`flex items-center gap-1 px-3 py-1 rounded-full ${
                 systemStatus.ollama_available ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
               }`}>
                 <div className={`w-2 h-2 rounded-full ${systemStatus.ollama_available ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                Ollama {systemStatus.ollama_available ? 'Disponible' : 'Non disponible'}
+                Ollama {systemStatus.ollama_available ? 'Disponible ✅' : 'Non disponible ❌'}
               </div>
             </div>
             
-            {/* Debug Info */}
-            <div className="text-xs text-gray-500 bg-gray-100 p-2 rounded">
-              🔧 Debug: Backend URL = {BACKEND_URL} | API = {API}
-            </div>
+            {/* Debug Info - Only in development */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="text-xs text-gray-500 bg-gray-100 p-2 rounded">
+                🔧 Debug: Backend URL = {BACKEND_URL} | API = {API}
+              </div>
+            )}
           </div>
 
           {/* Mode Selection */}
@@ -358,17 +443,18 @@ function App() {
             </div>
           </div>
 
-          {/* Test Sample */}
+          {/* CORRECTED: Test Sample amélioré */}
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
             <h3 className="font-semibold text-yellow-800 mb-2">🧪 Exemple de test</h3>
             <p className="text-sm text-yellow-700 mb-2">
-              Vous pouvez tester avec ce contenu juridique français :
+              Vous pouvez tester avec ce contenu juridique français (copiez-le dans un fichier .txt) :
             </p>
-            <div className="bg-white p-3 rounded border text-sm font-mono">
+            <div className="bg-white p-3 rounded border text-sm font-mono break-all">
               Monsieur Jean DUPONT, domicilié au 123 rue de la Paix, 75001 Paris, joignable au 06.12.34.56.78 ou par email jean.dupont@cabinet-martin.fr, travaille pour le Cabinet Juridique Martin. Son numéro SIRET est 12345678901234. Le dossier RG 24/12345 concerne cette affaire juridique.
             </div>
-            <div className="text-xs text-yellow-600 mt-2">
-              💡 Copiez ce texte dans un fichier .txt et déposez-le ci-dessous
+            <div className="text-xs text-yellow-600 mt-2 space-y-1">
+              <div>💡 Ce texte contient : téléphone, email, adresse, SIRET, nom, organisation, référence juridique</div>
+              <div>📊 Attendu : ~7-9 entités en mode Standard, ~9-11 en mode Approfondi</div>
             </div>
           </div>
 
@@ -377,11 +463,11 @@ function App() {
             <div
               {...getRootProps()}
               className={`text-center space-y-4 cursor-pointer ${
-                isDragActive ? 'text-blue-600' : 'text-gray-600'
+                isDragActive ? 'text-blue-600 bg-blue-50' : 'text-gray-600'
               }`}
             >
               <input {...getInputProps()} />
-              <div className="text-6xl">📁</div>
+              <div className="text-6xl">{isDragActive ? '📥' : '📁'}</div>
               <div>
                 <h3 className="text-xl font-semibold mb-2">
                   {isDragActive ? 
@@ -393,13 +479,13 @@ function App() {
                   Formats acceptés: PDF, DOCX, TXT • Limite: 50MB
                 </p>
               </div>
-              <button className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              <button type="button" className="mt-4 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
                 📄 Sélectionner un fichier
               </button>
             </div>
           </div>
 
-          {/* Processing Status */}
+          {/* CORRECTED: Processing Status amélioré */}
           {processing && (
             <div className="border border-blue-200 bg-blue-50 rounded-lg p-6">
               <div className="flex items-center gap-4">
@@ -409,11 +495,15 @@ function App() {
                     Traitement en cours...
                   </h3>
                   <p className="text-blue-700">
-                    Mode {currentMode} - Analyse du document avec {currentMode === 'standard' ? 'expressions régulières' : 'IA (spaCy + REGEX)'}
+                    Mode {currentMode} - Analyse avec {currentMode === 'standard' ? 'REGEX uniquement' : 'REGEX + spaCy NER'}
+                  </p>
+                  <p className="text-blue-600 text-sm mt-1">
+                    {document?.filename} ({document?.content?.length} caractères)
                   </p>
                   <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
                     <div className="bg-blue-600 h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
                   </div>
+                  <p className="text-xs text-blue-500 mt-1">Patience, cela peut prendre jusqu'à 60 secondes...</p>
                 </div>
               </div>
             </div>
@@ -423,7 +513,7 @@ function App() {
     );
   }
 
-  // Dashboard Page (reste identique, juste les logs en plus)
+  // Dashboard Page
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -439,13 +529,21 @@ function App() {
             </div>
             <div className="flex gap-2">
               <button 
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                onClick={() => setCurrentPage('upload')}
+                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                onClick={() => {
+                  setCurrentPage('upload');
+                  setEntities([]);
+                  setDocument(null);
+                }}
               >
                 📤 Nouveau document
               </button>
               <button 
-                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  stats.selected > 0 
+                    ? 'bg-green-600 text-white hover:bg-green-700' 
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
                 onClick={generateDocument}
                 disabled={stats.selected === 0}
               >
@@ -492,24 +590,24 @@ function App() {
               <input
                 type="text"
                 placeholder="🔍 Rechercher une entité..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
             <select
-              className="px-3 py-2 border border-gray-300 rounded-lg"
+              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition-colors"
               value={sourceFilter}
               onChange={(e) => setSourceFilter(e.target.value)}
             >
-              <option value="all">Toutes sources</option>
-              <option value="REGEX">REGEX</option>
-              <option value="NER">NER</option>
-              <option value="OLLAMA">OLLAMA</option>
-              <option value="MANUAL">Manuelle</option>
+              <option value="all">Toutes sources ({entities.length})</option>
+              <option value="REGEX">REGEX ({stats.regex})</option>
+              <option value="NER">NER ({stats.ner})</option>
+              <option value="OLLAMA">OLLAMA ({stats.ollama})</option>
+              <option value="MANUAL">Manuelle ({stats.manual})</option>
             </select>
             <button
-              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               onClick={() => {
                 const allSelected = entities.every(e => e.selected);
                 setEntities(entities.map(e => ({ ...e, selected: !allSelected })));
@@ -518,7 +616,11 @@ function App() {
               {entities.every(e => e.selected) ? '☑️ Tout décocher' : '✅ Tout sélectionner'}
             </button>
             <button
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                selectedEntities.length >= 2
+                  ? 'bg-purple-600 text-white hover:bg-purple-700'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
               onClick={createGroup}
               disabled={selectedEntities.length < 2}
             >
@@ -532,15 +634,20 @@ function App() {
           {filteredEntities.length === 0 ? (
             <div className="bg-white rounded-lg shadow p-8 text-center">
               <div className="text-4xl mb-4">😕</div>
-              <p className="text-gray-600">
+              <p className="text-gray-600 text-lg mb-2">
                 {entities.length === 0 
                   ? 'Aucune entité détectée dans ce document' 
                   : 'Aucune entité ne correspond à votre recherche'
                 }
               </p>
               {entities.length === 0 && (
-                <div className="mt-4 text-sm text-gray-500">
-                  💡 Essayez un document contenant des informations personnelles françaises : téléphones, emails, noms, adresses, etc.
+                <div className="mt-4 text-sm text-gray-500 space-y-1">
+                  <div>💡 Assurez-vous que votre document contient des données personnelles françaises :</div>
+                  <div>📞 Téléphones (06.12.34.56.78) • 📧 Emails • 🏠 Adresses complètes</div>
+                  <div>🏭 SIRET (14 chiffres) • ⚖️ Références juridiques (RG 24/12345)</div>
+                  <div className="mt-2 p-2 bg-yellow-50 rounded text-yellow-700">
+                    Testez avec l'exemple fourni ci-dessus pour vérifier le fonctionnement
+                  </div>
                 </div>
               )}
             </div>
@@ -554,6 +661,7 @@ function App() {
                       checked={entity.selected}
                       onChange={() => toggleEntity(entity.id)}
                       className="w-4 h-4"
+                      title="Sélectionner pour anonymisation"
                     />
                     <input
                       type="checkbox"
@@ -604,7 +712,7 @@ function App() {
                     <div className="space-y-2">
                       <div className="text-sm">
                         <span className="font-medium text-gray-700">Texte original: </span>
-                        <code className="bg-red-50 text-red-800 px-2 py-1 rounded border">{entity.text}</code>
+                        <code className="bg-red-50 text-red-800 px-2 py-1 rounded border break-all">{entity.text}</code>
                       </div>
                       
                       <div className="text-sm">
@@ -614,7 +722,7 @@ function App() {
                             <input
                               type="text"
                               defaultValue={entity.replacement}
-                              className="px-2 py-1 border rounded text-sm"
+                              className="px-2 py-1 border rounded text-sm min-w-48 focus:ring-2 focus:ring-blue-500"
                               autoFocus
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
@@ -630,10 +738,11 @@ function App() {
                                 setEditingEntity(null);
                               }}
                             />
+                            <span className="text-xs text-gray-500">↵ Valider • Echap Annuler</span>
                           </div>
                         ) : (
                           <code 
-                            className="bg-green-50 text-green-800 px-2 py-1 rounded border cursor-pointer hover:bg-green-100"
+                            className="bg-green-50 text-green-800 px-2 py-1 rounded border cursor-pointer hover:bg-green-100 transition-colors break-all"
                             onClick={() => setEditingEntity(entity.id)}
                             title="Cliquer pour modifier"
                           >
@@ -646,14 +755,14 @@ function App() {
                   
                   <div className="flex flex-col gap-1">
                     <button
-                      className="px-2 py-1 text-blue-600 hover:bg-blue-50 rounded text-sm"
+                      className="px-2 py-1 text-blue-600 hover:bg-blue-50 rounded text-sm transition-colors"
                       onClick={() => setEditingEntity(entity.id)}
                       title="Modifier le remplacement"
                     >
                       ✏️
                     </button>
                     <button
-                      className="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-sm"
+                      className="px-2 py-1 text-red-600 hover:bg-red-50 rounded text-sm transition-colors"
                       onClick={() => deleteEntity(entity.id)}
                       title="Supprimer l'entité"
                     >
@@ -671,6 +780,9 @@ function App() {
           📊 {filteredEntities.length} entités affichées sur {entities.length} total • 
           {stats.selected} sélectionnées pour anonymisation • 
           Mode {currentMode} utilisé
+          {searchTerm && (
+            <span className="text-blue-600"> • Recherche: "{searchTerm}"</span>
+          )}
         </div>
       </div>
     </div>

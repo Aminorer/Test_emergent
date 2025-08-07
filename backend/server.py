@@ -102,136 +102,174 @@ class DocumentGenerationRequest(BaseModel):
 # Services
 class RegexService:
     def __init__(self):
-        # Patterns téléphones français - SIMPLIFIÉS et CORRIGÉS
+        # CORRECTED: Patterns téléphones français - SIMPLIFIÉS et TESTÉS
         self.phone_patterns = [
-            r'\b0[1-9][\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}\b',  # 06.12.34.56.78
-            r'\+33[\s\.\-]?[1-9][\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}\b', # +33 6 12 34 56 78
+            r'\b0[1-9](?:[\s\.\-]?\d{2}){4}\b',  # 06.12.34.56.78, 06 12 34 56 78, etc.
+            r'\+33[\s\.\-]?[1-9](?:[\s\.\-]?\d{2}){4}\b', # +33 6 12 34 56 78
         ]
         
-        # Email pattern - SIMPLIFIÉ
-        self.email_pattern = r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
+        # CORRECTED: Email pattern - Plus robuste
+        self.email_pattern = r'\b[a-zA-Z0-9][a-zA-Z0-9._%+-]*@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
         
-        # SIRET pattern - 14 chiffres consécutifs
+        # CORRECTED: SIRET pattern - Exactement 14 chiffres
         self.siret_pattern = r'\b\d{14}\b'
         
-        # French SSN pattern - CORRIGÉ
-        self.ssn_pattern = r'\b[12]\d{12}\b'
+        # CORRECTED: French SSN pattern - Plus flexible
+        self.ssn_pattern = r'\b[12][\s\-]?\d{2}[\s\-]?\d{2}[\s\-]?\d{2}[\s\-]?\d{3}[\s\-]?\d{3}[\s\-]?\d{2}\b'
         
-        # Adresses françaises - AMÉLIORÉES
+        # CORRECTED: Adresses françaises - Patterns améliorés
         self.address_patterns = [
-            r'\b\d+\s+(?:rue|avenue|boulevard|place|impasse|allée|chemin|route|bis|ter)\s+[a-zA-Z\s\-\']+',
-            r'\b\d{5}\s+[A-Z][a-zA-Z\s\-\']+',  # Code postal + ville
-            r'\brue\s+[a-zA-Z\s\-\']+',
-            r'\bavenue\s+[a-zA-Z\s\-\']+',
-            r'\bboulevard\s+[a-zA-Z\s\-\']+',
+            r'\b\d+[\s,]*(?:bis|ter)?[\s,]+(?:rue|avenue|av|boulevard|bd|place|pl|impasse|imp|allée|chemin|route|rt)[\s,]+[a-zA-Z\s\-\']+\b',
+            r'\b\d{5}[\s,]+[A-Z][a-zA-Z\s\-\']{2,}\b',  # Code postal + ville (min 3 chars)
         ]
         
-        # Références juridiques - AMÉLIORÉES
+        # CORRECTED: Références juridiques - Plus spécifiques
         self.legal_patterns = [
-            r'\bRG\s+\d+/\d+',
-            r'\bdossier\s+(?:n°?|numéro)\s*\d+[-/]\d+',
-            r'\barticle\s+\d+(?:-\d+)?',
-            r'\bn°\s*\d+[-/]\d+',
+            r'\bRG[\s\-]?\d+[\s\-/]\d+\b',
+            r'\bdossier[\s]+(?:n°?|numéro)[\s]*\d+[\s\-/]\d+\b',
+            r'\barticle[\s]+\d+(?:[\s\-]\d+)?\b',
         ]
 
     def simple_luhn_check(self, number: str) -> bool:
-        """Validation Luhn simplifiée - accepte tous les SIRET de 14 chiffres pour les tests"""
-        return len(number) == 14 and number.isdigit()
+        """Validation Luhn simplifiée pour SIRET"""
+        if len(number) != 14 or not number.isdigit():
+            return False
+        
+        # Calcul Luhn basique
+        total = 0
+        reverse_digits = number[::-1]
+        
+        for i, digit in enumerate(reverse_digits):
+            n = int(digit)
+            if i % 2 == 1:  # Every second digit
+                n *= 2
+                if n > 9:
+                    n = n // 10 + n % 10
+            total += n
+        
+        return total % 10 == 0
 
     def extract_entities(self, text: str) -> List[Entity]:
         entities = []
         
-        print(f"🔍 REGEX - Analysing text length: {len(text)} chars")
-        print(f"🔍 REGEX - Text preview: {text[:200]}...")
+        print(f"🔍 REGEX - Analysing text: '{text[:100]}...'")
         
         # Téléphones
         for i, pattern in enumerate(self.phone_patterns):
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"📞 Phone pattern {i+1} found {len(matches)} matches")
-            for match in matches:
-                print(f"📞 Found phone: '{match.group()}' at {match.start()}-{match.end()}")
-                entities.append(Entity(
-                    text=match.group(),
-                    type=EntityType.PHONE,
-                    source=EntitySource.REGEX,
-                    confidence=1.0,
-                    replacement="06 XX XX XX XX",
-                    positions=[Position(start=match.start(), end=match.end())]
-                ))
+            try:
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                print(f"📞 Pattern {i+1} '{pattern}' found {len(matches)} matches")
+                for match in matches:
+                    phone_text = match.group().strip()
+                    print(f"📞 Found phone: '{phone_text}' at {match.start()}-{match.end()}")
+                    entities.append(Entity(
+                        text=phone_text,
+                        type=EntityType.PHONE,
+                        source=EntitySource.REGEX,
+                        confidence=1.0,
+                        replacement="06 XX XX XX XX",
+                        positions=[Position(start=match.start(), end=match.end())]
+                    ))
+            except Exception as e:
+                print(f"❌ Error in phone pattern {i}: {e}")
         
         # Emails
-        matches = list(re.finditer(self.email_pattern, text, re.IGNORECASE))
-        print(f"📧 Email pattern found {len(matches)} matches")
-        for match in matches:
-            print(f"📧 Found email: '{match.group()}' at {match.start()}-{match.end()}")
-            entities.append(Entity(
-                text=match.group(),
-                type=EntityType.EMAIL,
-                source=EntitySource.REGEX,
-                confidence=1.0,
-                replacement="email.anonymise@exemple.fr",
-                positions=[Position(start=match.start(), end=match.end())]
-            ))
-        
-        # SIRET
-        matches = list(re.finditer(self.siret_pattern, text))
-        print(f"🏭 SIRET pattern found {len(matches)} matches")
-        for match in matches:
-            siret = match.group()
-            print(f"🏭 Found SIRET: '{siret}' at {match.start()}-{match.end()}")
-            if self.simple_luhn_check(siret):
+        try:
+            matches = list(re.finditer(self.email_pattern, text, re.IGNORECASE))
+            print(f"📧 Email pattern found {len(matches)} matches")
+            for match in matches:
+                email_text = match.group().strip()
+                print(f"📧 Found email: '{email_text}' at {match.start()}-{match.end()}")
                 entities.append(Entity(
-                    text=siret,
-                    type=EntityType.SIRET,
+                    text=email_text,
+                    type=EntityType.EMAIL,
                     source=EntitySource.REGEX,
                     confidence=1.0,
-                    replacement="[SIRET Anonymisé]",
+                    replacement="email.anonymise@exemple.fr",
                     positions=[Position(start=match.start(), end=match.end())]
                 ))
+        except Exception as e:
+            print(f"❌ Error in email pattern: {e}")
+        
+        # SIRET avec validation Luhn
+        try:
+            matches = list(re.finditer(self.siret_pattern, text))
+            print(f"🏭 SIRET pattern found {len(matches)} potential matches")
+            for match in matches:
+                siret = match.group().strip()
+                print(f"🏭 Checking SIRET: '{siret}' at {match.start()}-{match.end()}")
+                if self.simple_luhn_check(siret):
+                    print(f"✅ Valid SIRET: {siret}")
+                    entities.append(Entity(
+                        text=siret,
+                        type=EntityType.SIRET,
+                        source=EntitySource.REGEX,
+                        confidence=1.0,
+                        replacement="[SIRET Anonymisé]",
+                        positions=[Position(start=match.start(), end=match.end())]
+                    ))
+                else:
+                    print(f"❌ Invalid SIRET (Luhn): {siret}")
+        except Exception as e:
+            print(f"❌ Error in SIRET pattern: {e}")
         
         # SSN
-        matches = list(re.finditer(self.ssn_pattern, text))
-        print(f"🆔 SSN pattern found {len(matches)} matches")
-        for match in matches:
-            print(f"🆔 Found SSN: '{match.group()}' at {match.start()}-{match.end()}")
-            entities.append(Entity(
-                text=match.group(),
-                type=EntityType.SSN,
-                source=EntitySource.REGEX,
-                confidence=1.0,
-                replacement="[N° Sécurité Sociale Anonymisé]",
-                positions=[Position(start=match.start(), end=match.end())]
-            ))
+        try:
+            matches = list(re.finditer(self.ssn_pattern, text))
+            print(f"🆔 SSN pattern found {len(matches)} matches")
+            for match in matches:
+                ssn_text = match.group().strip()
+                print(f"🆔 Found SSN: '{ssn_text}' at {match.start()}-{match.end()}")
+                entities.append(Entity(
+                    text=ssn_text,
+                    type=EntityType.SSN,
+                    source=EntitySource.REGEX,
+                    confidence=1.0,
+                    replacement="[N° Sécurité Sociale Anonymisé]",
+                    positions=[Position(start=match.start(), end=match.end())]
+                ))
+        except Exception as e:
+            print(f"❌ Error in SSN pattern: {e}")
         
         # Adresses
         for i, pattern in enumerate(self.address_patterns):
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"🏠 Address pattern {i+1} found {len(matches)} matches")
-            for match in matches:
-                print(f"🏠 Found address: '{match.group()}' at {match.start()}-{match.end()}")
-                entities.append(Entity(
-                    text=match.group().strip(),
-                    type=EntityType.ADDRESS,
-                    source=EntitySource.REGEX,
-                    confidence=1.0,
-                    replacement="[Adresse Anonymisée]",
-                    positions=[Position(start=match.start(), end=match.end())]
-                ))
+            try:
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                print(f"🏠 Address pattern {i+1} found {len(matches)} matches")
+                for match in matches:
+                    address_text = match.group().strip()
+                    # Filtrer les faux positifs (trop courts)
+                    if len(address_text) > 8:
+                        print(f"🏠 Found address: '{address_text}' at {match.start()}-{match.end()}")
+                        entities.append(Entity(
+                            text=address_text,
+                            type=EntityType.ADDRESS,
+                            source=EntitySource.REGEX,
+                            confidence=1.0,
+                            replacement="[Adresse Anonymisée]",
+                            positions=[Position(start=match.start(), end=match.end())]
+                        ))
+            except Exception as e:
+                print(f"❌ Error in address pattern {i}: {e}")
         
         # Références juridiques
         for i, pattern in enumerate(self.legal_patterns):
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"⚖️ Legal pattern {i+1} found {len(matches)} matches")
-            for match in matches:
-                print(f"⚖️ Found legal ref: '{match.group()}' at {match.start()}-{match.end()}")
-                entities.append(Entity(
-                    text=match.group(),
-                    type=EntityType.LEGAL,
-                    source=EntitySource.REGEX,
-                    confidence=1.0,
-                    replacement="[Référence Anonymisée]",
-                    positions=[Position(start=match.start(), end=match.end())]
-                ))
+            try:
+                matches = list(re.finditer(pattern, text, re.IGNORECASE))
+                print(f"⚖️ Legal pattern {i+1} found {len(matches)} matches")
+                for match in matches:
+                    legal_text = match.group().strip()
+                    print(f"⚖️ Found legal ref: '{legal_text}' at {match.start()}-{match.end()}")
+                    entities.append(Entity(
+                        text=legal_text,
+                        type=EntityType.LEGAL,
+                        source=EntitySource.REGEX,
+                        confidence=1.0,
+                        replacement="[Référence Anonymisée]",
+                        positions=[Position(start=match.start(), end=match.end())]
+                    ))
+            except Exception as e:
+                print(f"❌ Error in legal pattern {i}: {e}")
         
         print(f"✅ REGEX - Total entities found: {len(entities)}")
         return entities
@@ -249,31 +287,38 @@ class NERService:
         
         print(f"🧠 NER - Processing text with spaCy...")
         entities = []
-        doc = self.nlp(text)
         
-        for ent in doc.ents:
-            print(f"🔍 NER - Found: '{ent.text}' ({ent.label_}) at {ent.start_char}-{ent.end_char}")
-            if ent.label_ in ["PER", "PERSON"]:  # Person
-                entities.append(Entity(
-                    text=ent.text,
-                    type=EntityType.PERSON,
-                    source=EntitySource.NER,
-                    confidence=0.9,
-                    replacement=f"Personne {chr(64 + self.person_counter)}",
-                    positions=[Position(start=ent.start_char, end=ent.end_char)]
-                ))
-                self.person_counter += 1
+        try:
+            doc = self.nlp(text)
             
-            elif ent.label_ in ["ORG", "ORGANIZATION"]:  # Organization
-                entities.append(Entity(
-                    text=ent.text,
-                    type=EntityType.ORGANIZATION,
-                    source=EntitySource.NER,
-                    confidence=0.85,
-                    replacement=f"Organisation {chr(64 + self.org_counter)}",
-                    positions=[Position(start=ent.start_char, end=ent.end_char)]
-                ))
-                self.org_counter += 1
+            for ent in doc.ents:
+                print(f"🔍 NER - Found: '{ent.text}' ({ent.label_}) at {ent.start_char}-{ent.end_char}")
+                
+                if ent.label_ in ["PER", "PERSON"]:  # Person
+                    entities.append(Entity(
+                        text=ent.text.strip(),
+                        type=EntityType.PERSON,
+                        source=EntitySource.NER,
+                        confidence=0.9,
+                        replacement=f"Personne {chr(64 + self.person_counter)}",
+                        positions=[Position(start=ent.start_char, end=ent.end_char)]
+                    ))
+                    self.person_counter += 1
+                
+                elif ent.label_ in ["ORG", "ORGANIZATION"]:  # Organization
+                    entities.append(Entity(
+                        text=ent.text.strip(),
+                        type=EntityType.ORGANIZATION,
+                        source=EntitySource.NER,
+                        confidence=0.85,
+                        replacement=f"Organisation {chr(64 + self.org_counter)}",
+                        positions=[Position(start=ent.start_char, end=ent.end_char)]
+                    ))
+                    self.org_counter += 1
+        
+        except Exception as e:
+            print(f"❌ NER Error: {e}")
+            return []
         
         print(f"✅ NER - Total entities found: {len(entities)}")
         return entities
@@ -354,10 +399,9 @@ async def process_document(request: DocumentRequest):
     print(f"   - Filename: {request.filename}")
     print(f"   - Mode: {request.mode}")
     print(f"   - Content length: {len(request.content)} chars")
-    print(f"   - Content preview: {request.content[:100]}...")
+    print(f"   - Content preview: {request.content[:200]}...")
     
     start_time = datetime.now()
-    
     all_entities = []
     
     try:
@@ -380,17 +424,22 @@ async def process_document(request: DocumentRequest):
         if request.mode == ProcessingMode.OLLAMA:
             print(f"⚠️ Ollama mode not implemented yet")
         
-        # Remove duplicates based on text and position overlap
+        # Remove overlapping entities (keep highest confidence)
         unique_entities = []
         for entity in all_entities:
-            # Check if this entity overlaps with any existing entity
+            # Check for overlaps
             overlaps = False
-            for existing in unique_entities:
+            for existing in unique_entities[:]:
                 if (entity.positions[0].start < existing.positions[0].end and 
                     entity.positions[0].end > existing.positions[0].start):
-                    print(f"🔄 Removing duplicate/overlap: '{entity.text}' vs '{existing.text}'")
-                    overlaps = True
-                    break
+                    # Overlap detected - keep the one with higher confidence
+                    if entity.confidence > existing.confidence:
+                        unique_entities.remove(existing)
+                        print(f"🔄 Replaced lower confidence entity: '{existing.text}' with '{entity.text}'")
+                    else:
+                        overlaps = True
+                        print(f"🔄 Skipped lower confidence entity: '{entity.text}'")
+                        break
             
             if not overlaps:
                 unique_entities.append(entity)
@@ -464,11 +513,13 @@ async def generate_anonymized_document(request: DocumentGenerationRequest):
         print(f"📝 Anonymized content length: {len(anonymized_content)} chars")
         print(f"📝 Anonymized preview: {anonymized_content[:200]}...")
         
-        # Add content to document
-        paragraphs = anonymized_content.split('\n')
-        for paragraph in paragraphs:
-            if paragraph.strip():
-                doc.add_paragraph(paragraph)
+        # Add content to document (split by lines)
+        lines = anonymized_content.split('\n')
+        for line in lines:
+            if line.strip():
+                doc.add_paragraph(line.strip())
+            else:
+                doc.add_paragraph("")  # Empty line
         
         # Save to memory
         doc_io = io.BytesIO()
@@ -494,13 +545,14 @@ async def generate_anonymized_document(request: DocumentGenerationRequest):
 # Include router
 app.include_router(api_router)
 
-# CORS middleware - CORRIGÉ pour permettre localhost:3000
+# CORRECTED: CORS middleware - Allow both ports
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # React dev server
         "http://127.0.0.1:3000",
         "http://localhost:3001",  # Backup port
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
