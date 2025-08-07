@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Form
+from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -102,7 +102,7 @@ class DocumentGenerationRequest(BaseModel):
 # Services
 class RegexService:
     def __init__(self):
-        # Patterns téléphones français - SIMPLIFIÉS
+        # Patterns téléphones français - SIMPLIFIÉS et CORRIGÉS
         self.phone_patterns = [
             r'\b0[1-9][\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}\b',  # 06.12.34.56.78
             r'\+33[\s\.\-]?[1-9][\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}[\s\.\-]?\d{2}\b', # +33 6 12 34 56 78
@@ -111,7 +111,7 @@ class RegexService:
         # Email pattern - SIMPLIFIÉ
         self.email_pattern = r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
         
-        # SIRET pattern - CORRIGÉ (14 chiffres consécutifs)
+        # SIRET pattern - 14 chiffres consécutifs
         self.siret_pattern = r'\b\d{14}\b'
         
         # French SSN pattern - CORRIGÉ
@@ -119,8 +119,8 @@ class RegexService:
         
         # Adresses françaises - AMÉLIORÉES
         self.address_patterns = [
-            r'\b\d+[,\s]+(?:rue|avenue|boulevard|place|impasse|allée|chemin|route|bis|ter)[,\s]+[a-zA-Z\s\-\']+',
-            r'\b\d{5}[,\s]+[A-Z][a-zA-Z\s\-\']+',  # Code postal + ville
+            r'\b\d+\s+(?:rue|avenue|boulevard|place|impasse|allée|chemin|route|bis|ter)\s+[a-zA-Z\s\-\']+',
+            r'\b\d{5}\s+[A-Z][a-zA-Z\s\-\']+',  # Code postal + ville
             r'\brue\s+[a-zA-Z\s\-\']+',
             r'\bavenue\s+[a-zA-Z\s\-\']+',
             r'\bboulevard\s+[a-zA-Z\s\-\']+',
@@ -141,13 +141,15 @@ class RegexService:
     def extract_entities(self, text: str) -> List[Entity]:
         entities = []
         
-        print(f"🔍 REGEX - Analysing text: {text[:100]}...")
+        print(f"🔍 REGEX - Analysing text length: {len(text)} chars")
+        print(f"🔍 REGEX - Text preview: {text[:200]}...")
         
         # Téléphones
-        for pattern in self.phone_patterns:
+        for i, pattern in enumerate(self.phone_patterns):
             matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"📞 Phone pattern '{pattern}' found {len(matches)} matches")
+            print(f"📞 Phone pattern {i+1} found {len(matches)} matches")
             for match in matches:
+                print(f"📞 Found phone: '{match.group()}' at {match.start()}-{match.end()}")
                 entities.append(Entity(
                     text=match.group(),
                     type=EntityType.PHONE,
@@ -161,6 +163,7 @@ class RegexService:
         matches = list(re.finditer(self.email_pattern, text, re.IGNORECASE))
         print(f"📧 Email pattern found {len(matches)} matches")
         for match in matches:
+            print(f"📧 Found email: '{match.group()}' at {match.start()}-{match.end()}")
             entities.append(Entity(
                 text=match.group(),
                 type=EntityType.EMAIL,
@@ -175,6 +178,7 @@ class RegexService:
         print(f"🏭 SIRET pattern found {len(matches)} matches")
         for match in matches:
             siret = match.group()
+            print(f"🏭 Found SIRET: '{siret}' at {match.start()}-{match.end()}")
             if self.simple_luhn_check(siret):
                 entities.append(Entity(
                     text=siret,
@@ -189,6 +193,7 @@ class RegexService:
         matches = list(re.finditer(self.ssn_pattern, text))
         print(f"🆔 SSN pattern found {len(matches)} matches")
         for match in matches:
+            print(f"🆔 Found SSN: '{match.group()}' at {match.start()}-{match.end()}")
             entities.append(Entity(
                 text=match.group(),
                 type=EntityType.SSN,
@@ -199,10 +204,11 @@ class RegexService:
             ))
         
         # Adresses
-        for pattern in self.address_patterns:
+        for i, pattern in enumerate(self.address_patterns):
             matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"🏠 Address pattern '{pattern}' found {len(matches)} matches")
+            print(f"🏠 Address pattern {i+1} found {len(matches)} matches")
             for match in matches:
+                print(f"🏠 Found address: '{match.group()}' at {match.start()}-{match.end()}")
                 entities.append(Entity(
                     text=match.group().strip(),
                     type=EntityType.ADDRESS,
@@ -213,10 +219,11 @@ class RegexService:
                 ))
         
         # Références juridiques
-        for pattern in self.legal_patterns:
+        for i, pattern in enumerate(self.legal_patterns):
             matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            print(f"⚖️ Legal pattern '{pattern}' found {len(matches)} matches")
+            print(f"⚖️ Legal pattern {i+1} found {len(matches)} matches")
             for match in matches:
+                print(f"⚖️ Found legal ref: '{match.group()}' at {match.start()}-{match.end()}")
                 entities.append(Entity(
                     text=match.group(),
                     type=EntityType.LEGAL,
@@ -245,7 +252,7 @@ class NERService:
         doc = self.nlp(text)
         
         for ent in doc.ents:
-            print(f"🔍 NER - Found: '{ent.text}' ({ent.label_})")
+            print(f"🔍 NER - Found: '{ent.text}' ({ent.label_}) at {ent.start_char}-{ent.end_char}")
             if ent.label_ in ["PER", "PERSON"]:  # Person
                 entities.append(Entity(
                     text=ent.text,
@@ -328,7 +335,7 @@ ner_service = NERService()
 # API Endpoints
 @api_router.get("/")
 async def root():
-    return {"message": "Anonymiseur Juridique RGPD v3.0"}
+    return {"message": "Anonymiseur Juridique RGPD v3.0", "status": "running"}
 
 @api_router.get("/health")
 async def health_check():
@@ -336,60 +343,83 @@ async def health_check():
     return {
         "status": "healthy",
         "spacy_available": nlp is not None,
-        "ollama_available": False
+        "ollama_available": False,
+        "timestamp": datetime.now().isoformat()
     }
 
 @api_router.post("/process", response_model=ProcessingResponse)
 async def process_document(request: DocumentRequest):
     """Process document with selected mode"""
+    print(f"🚀 [API] Processing request:")
+    print(f"   - Filename: {request.filename}")
+    print(f"   - Mode: {request.mode}")
+    print(f"   - Content length: {len(request.content)} chars")
+    print(f"   - Content preview: {request.content[:100]}...")
+    
     start_time = datetime.now()
     
     all_entities = []
     
-    print(f"🔄 Processing document in {request.mode} mode...")
-    print(f"📄 Content preview: {request.content[:200]}...")
-    
-    # Always run REGEX
-    regex_entities = regex_service.extract_entities(request.content)
-    all_entities.extend(regex_entities)
-    print(f"📊 REGEX found {len(regex_entities)} entities")
-    
-    # Run NER if Advanced mode and spaCy available
-    if request.mode == ProcessingMode.ADVANCED and nlp:
-        ner_entities = ner_service.extract_entities(request.content)
-        all_entities.extend(ner_entities)
-        print(f"📊 NER found {len(ner_entities)} entities")
-    
-    # Ollama mode (placeholder for now)
-    if request.mode == ProcessingMode.OLLAMA:
-        pass
-    
-    # Remove duplicates based on text and position overlap
-    unique_entities = []
-    for entity in all_entities:
-        # Check if this entity overlaps with any existing entity
-        overlaps = False
-        for existing in unique_entities:
-            if (entity.positions[0].start < existing.positions[0].end and 
-                entity.positions[0].end > existing.positions[0].start):
-                overlaps = True
-                break
+    try:
+        # Always run REGEX
+        print(f"🔧 Running REGEX processing...")
+        regex_entities = regex_service.extract_entities(request.content)
+        all_entities.extend(regex_entities)
+        print(f"📊 REGEX found {len(regex_entities)} entities")
         
-        if not overlaps:
-            unique_entities.append(entity)
-    
-    processing_time = (datetime.now() - start_time).total_seconds()
-    
-    print(f"✅ Processing completed: {len(unique_entities)} entities in {processing_time:.2f}s")
-    
-    return ProcessingResponse(
-        entities=unique_entities,
-        processing_time=processing_time,
-        mode_used=request.mode,
-        total_occurrences=len(unique_entities),
-        spacy_available=nlp is not None,
-        ollama_available=False
-    )
+        # Run NER if Advanced mode and spaCy available
+        if request.mode == ProcessingMode.ADVANCED and nlp:
+            print(f"🔧 Running NER processing...")
+            ner_entities = ner_service.extract_entities(request.content)
+            all_entities.extend(ner_entities)
+            print(f"📊 NER found {len(ner_entities)} entities")
+        elif request.mode == ProcessingMode.ADVANCED and not nlp:
+            print(f"⚠️ Advanced mode requested but spaCy not available")
+        
+        # Ollama mode (placeholder for now)
+        if request.mode == ProcessingMode.OLLAMA:
+            print(f"⚠️ Ollama mode not implemented yet")
+        
+        # Remove duplicates based on text and position overlap
+        unique_entities = []
+        for entity in all_entities:
+            # Check if this entity overlaps with any existing entity
+            overlaps = False
+            for existing in unique_entities:
+                if (entity.positions[0].start < existing.positions[0].end and 
+                    entity.positions[0].end > existing.positions[0].start):
+                    print(f"🔄 Removing duplicate/overlap: '{entity.text}' vs '{existing.text}'")
+                    overlaps = True
+                    break
+            
+            if not overlaps:
+                unique_entities.append(entity)
+        
+        processing_time = (datetime.now() - start_time).total_seconds()
+        
+        print(f"✅ Processing completed successfully:")
+        print(f"   - Total entities: {len(unique_entities)}")
+        print(f"   - Processing time: {processing_time:.2f}s")
+        print(f"   - Mode used: {request.mode}")
+        
+        response = ProcessingResponse(
+            entities=unique_entities,
+            processing_time=processing_time,
+            mode_used=request.mode,
+            total_occurrences=len(unique_entities),
+            spacy_available=nlp is not None,
+            ollama_available=False
+        )
+        
+        print(f"📤 Sending response with {len(response.entities)} entities")
+        return response
+        
+    except Exception as e:
+        print(f"❌ Error during processing: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @api_router.post("/test-ollama")
 async def test_ollama_connection(config: OllamaConfig):
@@ -416,7 +446,11 @@ async def get_ollama_models(url: str = "http://localhost:11434"):
 async def generate_anonymized_document(request: DocumentGenerationRequest):
     """Generate anonymized DOCX document"""
     try:
-        print(f"📄 Generating document with {len(request.entities)} entities")
+        print(f"📄 [API] Generating document:")
+        print(f"   - Filename: {request.filename}")
+        print(f"   - Entities count: {len(request.entities)}")
+        print(f"   - Selected entities: {len([e for e in request.entities if e.selected])}")
+        print(f"   - Content length: {len(request.original_content)} chars")
         
         # Create new document
         doc = Document()
@@ -426,6 +460,9 @@ async def generate_anonymized_document(request: DocumentGenerationRequest):
             request.original_content, 
             request.entities
         )
+        
+        print(f"📝 Anonymized content length: {len(anonymized_content)} chars")
+        print(f"📝 Anonymized preview: {anonymized_content[:200]}...")
         
         # Add content to document
         paragraphs = anonymized_content.split('\n')
@@ -438,7 +475,7 @@ async def generate_anonymized_document(request: DocumentGenerationRequest):
         doc.save(doc_io)
         doc_io.seek(0)
         
-        print(f"✅ Document generated successfully")
+        print(f"✅ Document generated successfully, size: {len(doc_io.getvalue())} bytes")
         
         # Return as streaming response
         return StreamingResponse(
@@ -449,15 +486,22 @@ async def generate_anonymized_document(request: DocumentGenerationRequest):
     
     except Exception as e:
         print(f"❌ Error generating document: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error generating document: {str(e)}")
 
 # Include router
 app.include_router(api_router)
 
-# CORS middleware
+# CORS middleware - CORRIGÉ pour permettre localhost:3000
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",  # React dev server
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",  # Backup port
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -476,4 +520,5 @@ if __name__ == "__main__":
     print("📍 Backend URL: http://localhost:8080")
     print(f"🧠 spaCy Available: {nlp is not None}")
     print(f"🔗 Ollama Support: {httpx is not None}")
+    print("=" * 50)
     uvicorn.run(app, host="127.0.0.1", port=8080, reload=True)

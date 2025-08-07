@@ -3,7 +3,8 @@ import { useDropzone } from 'react-dropzone';
 import axios from 'axios';
 import './App.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
+// CORRECTION: Utiliser port 8080 et configuration proxy correcte
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8080';
 const API = `${BACKEND_URL}/api`;
 
 function App() {
@@ -22,11 +23,17 @@ function App() {
   useEffect(() => {
     const checkStatus = async () => {
       try {
+        console.log('🔍 Checking backend status at:', API);
         const response = await axios.get(`${API}/health`);
+        console.log('✅ Backend Response:', response.data);
         setSystemStatus(response.data);
-        console.log('✅ System Status:', response.data);
       } catch (error) {
-        console.error('❌ Status check failed:', error);
+        console.error('❌ Backend connection failed:', error);
+        console.error('❌ Error details:', {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status
+        });
         setSystemStatus({ spacy_available: false, ollama_available: false });
       }
     };
@@ -37,46 +44,70 @@ function App() {
     if (acceptedFiles.length === 0) return;
     
     const file = acceptedFiles[0];
+    console.log('📄 File selected:', file.name, file.size, 'bytes');
+    
     const reader = new FileReader();
     
     reader.onload = async (event) => {
       const content = event.target.result;
+      console.log('📝 File content length:', content.length);
+      console.log('📝 Content preview:', content.substring(0, 200));
+      
       setDocument({ filename: file.name, content });
       setProcessing(true);
       
       try {
-        console.log(`🔄 Processing with mode: ${currentMode}`);
-        console.log(`📄 Content length: ${content.length} chars`);
-        console.log(`📝 Content preview: ${content.substring(0, 200)}`);
+        console.log(`🔄 Sending request to: ${API}/process`);
+        console.log(`🔄 Processing mode: ${currentMode}`);
         
-        const response = await axios.post(`${API}/process`, {
+        const payload = {
           content,
           filename: file.name,
           mode: currentMode
-        }, {
+        };
+        console.log('📤 Request payload:', payload);
+        
+        const response = await axios.post(`${API}/process`, payload, {
           headers: {
             'Content-Type': 'application/json'
-          }
+          },
+          timeout: 30000 // 30 secondes timeout
         });
         
         console.log('✅ Processing response:', response.data);
-        setEntities(response.data.entities);
+        setEntities(response.data.entities || []);
         
-        if (response.data.entities.length === 0) {
-          alert(`Aucune entité détectée dans le document.\nMode utilisé: ${response.data.mode_used}\nTemps de traitement: ${response.data.processing_time.toFixed(2)}s\n\nVérifiez que votre document contient des données personnelles françaises (téléphones, emails, noms, adresses, etc.)`);
+        if ((response.data.entities || []).length === 0) {
+          alert(`Aucune entité détectée dans le document.\nMode utilisé: ${response.data.mode_used}\nTemps de traitement: ${response.data.processing_time?.toFixed(2)}s\n\nVérifiez que votre document contient des données personnelles françaises (téléphones, emails, noms, adresses, etc.)`);
         } else {
-          alert(`Document traité avec succès!\n${response.data.total_occurrences} entités détectées en ${response.data.processing_time.toFixed(2)}s`);
+          alert(`Document traité avec succès!\n${response.data.total_occurrences} entités détectées en ${response.data.processing_time?.toFixed(2)}s`);
           setCurrentPage('dashboard');
         }
       } catch (error) {
         console.error('❌ Processing error:', error);
-        alert('Erreur lors du traitement du document:\n' + (error.response?.data?.detail || error.message));
+        console.error('❌ Error response:', error.response?.data);
+        console.error('❌ Error status:', error.response?.status);
+        
+        let errorMessage = 'Erreur de connexion au backend';
+        if (error.response?.data?.detail) {
+          errorMessage = error.response.data.detail;
+        } else if (error.message) {
+          errorMessage = error.message;
+        }
+        
+        alert(`Erreur lors du traitement du document:\n${errorMessage}\n\nVérifiez que le backend tourne sur http://localhost:8080`);
       } finally {
         setProcessing(false);
       }
     };
     
-    reader.readAsText(file);
+    reader.onerror = () => {
+      console.error('❌ File reading error');
+      alert('Erreur lors de la lecture du fichier');
+      setProcessing(false);
+    };
+    
+    reader.readAsText(file, 'UTF-8');
   }, [currentMode]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -94,16 +125,23 @@ function App() {
     try {
       console.log('📄 Generating document with entities:', entities.filter(e => e.selected));
       
-      const response = await axios.post(`${API}/generate-document`, {
+      const payload = {
         entities: entities,
         original_content: document.content,
         filename: `${document.filename.split('.')[0]}_anonymise.docx`
-      }, {
+      };
+      
+      console.log('📤 Document generation payload:', payload);
+      
+      const response = await axios.post(`${API}/generate-document`, payload, {
         responseType: 'blob',
         headers: {
           'Content-Type': 'application/json'
-        }
+        },
+        timeout: 30000
       });
+      
+      console.log('✅ Document generated, size:', response.data.size);
       
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -118,7 +156,8 @@ function App() {
       alert('Document anonymisé généré avec succès!');
     } catch (error) {
       console.error('❌ Document generation error:', error);
-      alert('Erreur lors de la génération du document:\n' + (error.response?.data?.detail || error.message));
+      console.error('❌ Error response:', error.response?.data);
+      alert(`Erreur lors de la génération du document:\n${error.response?.data?.detail || error.message}`);
     }
   };
 
@@ -196,7 +235,7 @@ function App() {
               100% local et conforme RGPD.
             </p>
             
-            {/* System Status */}
+            {/* System Status avec debug */}
             <div className="flex justify-center gap-4 text-sm">
               <div className={`flex items-center gap-1 px-3 py-1 rounded-full ${
                 systemStatus.spacy_available ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
@@ -210,6 +249,11 @@ function App() {
                 <div className={`w-2 h-2 rounded-full ${systemStatus.ollama_available ? 'bg-green-500' : 'bg-gray-400'}`}></div>
                 Ollama {systemStatus.ollama_available ? 'Disponible' : 'Non disponible'}
               </div>
+            </div>
+            
+            {/* Debug Info */}
+            <div className="text-xs text-gray-500 bg-gray-100 p-2 rounded">
+              🔧 Debug: Backend URL = {BACKEND_URL} | API = {API}
             </div>
           </div>
 
@@ -379,7 +423,7 @@ function App() {
     );
   }
 
-  // Dashboard Page
+  // Dashboard Page (reste identique, juste les logs en plus)
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
