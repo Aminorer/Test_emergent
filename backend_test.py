@@ -180,16 +180,17 @@ class AnonymiseurAPITester:
                 self.log_test("Generate Document", False, "Could not get entities for document generation")
                 return None
             
-            payload = {
-                "entities": process_result['entities'],
+            # Prepare form data
+            form_data = {
                 "original_content": self.test_document,
                 "filename": "test_anonymized.docx"
             }
             
+            # Send entities as JSON in the body and other params as form data
             response = requests.post(
                 f"{self.api_url}/generate-document", 
-                json=payload,
-                headers={'Content-Type': 'application/json'},
+                json=process_result['entities'],  # Send entities as JSON body
+                params=form_data,  # Send other params as query parameters
                 timeout=30
             )
             
