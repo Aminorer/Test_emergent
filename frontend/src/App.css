@@ -36,7 +36,7 @@ body {
   background: #94a3b8;
 }
 
-/* Smooth transitions for all interactive elements */
+/* Smooth transitions */
 button, input, select, textarea {
   transition: all 0.2s ease-in-out;
 }
@@ -62,79 +62,4 @@ textarea:focus-visible {
 
 .animate-pulse-loading {
   animation: pulse-loading 2s ease-in-out infinite;
-}
-
-/* Card hover effects */
-.hover-lift {
-  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-}
-
-.hover-lift:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-}
-
-/* Glass effect */
-.glass-effect {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-/* Status indicators */
-.status-connected {
-  background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
-}
-
-.status-disconnected {
-  background: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.3);
-}
-
-.status-unknown {
-  background: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.3);
-}
-
-/* Custom file upload styles */
-.file-upload-zone {
-  transition: all 0.3s ease;
-  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-}
-
-.file-upload-zone:hover {
-  background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-  border-color: #3b82f6;
-}
-
-.file-upload-zone.drag-active {
-  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-  border-color: #2563eb;
-  transform: scale(1.02);
-}
-
-/* Entity type colors */
-.entity-phone { border-left: 4px solid #8b5cf6; }
-.entity-email { border-left: 4px solid #06b6d4; }
-.entity-address { border-left: 4px solid #10b981; }
-.entity-person { border-left: 4px solid #f59e0b; }
-.entity-organization { border-left: 4px solid #ef4444; }
-.entity-siret { border-left: 4px solid #6366f1; }
-.entity-legal { border-left: 4px solid #84cc16; }
-.entity-ssn { border-left: 4px solid #ec4899; }
-
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .glass-effect {
-    background: rgba(15, 23, 42, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-  }
-}
-
-/* Print styles */
-@media print {
-  .no-print {
-    display: none !important;
-  }
 }
